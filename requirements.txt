@@ -1,0 +1,19 @@
+# NOTE: Install PyTorch FIRST before this file (RTX 5070 Ti / Blackwell sm_120 requires CUDA 12.8):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+diffusers
+transformers
+accelerate
+huggingface_hub
+safetensors
+ip-adapter
+rembg
+pillow
+fastapi
+uvicorn
+python-multipart
+opencv-python
+numpy
+scipy
+scikit-image
+tqdm
+einops

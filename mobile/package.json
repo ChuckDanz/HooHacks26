@@ -1,0 +1,23 @@
+{
+  "name": "hoohacks-tryon-mobile",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios"
+  },
+  "dependencies": {
+    "expo": "~51.0.0",
+    "expo-router": "~3.5.0",
+    "expo-camera": "~15.0.0",
+    "expo-image-picker": "~15.0.0",
+    "expo-file-system": "~17.0.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0",
+    "axios": "^1.7.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0"
+  }
+}

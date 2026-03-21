@@ -3,3 +3,6 @@
 venv/
 env/
 ENV/
+
+test_cases/
+output/
