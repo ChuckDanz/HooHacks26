@@ -17,3 +17,4 @@ scipy
 scikit-image
 tqdm
 einops
+sam3

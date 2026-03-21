@@ -79,22 +79,46 @@ def clean_garment(img: Image.Image) -> Image.Image:
     return white.convert("RGB")
 
 
+def adjust_garment_for_fit(img: Image.Image, fit_delta_inches: float) -> Image.Image:
+    """
+    Scale garment image to suggest fit looseness/tightness.
+    fit_delta_inches > 0 = garment runs large (scale up = looks baggier)
+    fit_delta_inches < 0 = garment runs small (scale down = looks tighter)
+    fit_delta_inches = 0 = true to size (no change)
+    """
+    if fit_delta_inches == 0:
+        return img
+    scale = 1.0 + (fit_delta_inches * 0.03)
+    scale = max(0.7, min(scale, 1.4))  # clamp to sane range
+    w, h = img.size
+    new_w, new_h = int(w * scale), int(h * scale)
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGB", (w, h), (255, 255, 255))
+    offset_x = (w - new_w) // 2
+    offset_y = (h - new_h) // 2
+    canvas.paste(resized, (offset_x, offset_y))
+    return canvas
+
+
 # ── Pipeline loader ───────────────────────────────────────────────────────────
 
 def load_pipeline():
+    from huggingface_hub import snapshot_download
     print(f"Loading CatVTON pipeline on {DEVICE} ({MIXED_PRECISION})...")
+    # Download/cache the full HuggingFace repo — includes DensePose + SCHP weights
+    repo_path = snapshot_download(repo_id=ATTN_CKPT)
     weight_dtype = init_weight_dtype(MIXED_PRECISION)
     pipeline = CatVTONPipeline(
         base_ckpt=BASE_CKPT,
-        attn_ckpt=ATTN_CKPT,
+        attn_ckpt=repo_path,
         attn_ckpt_version="mix",
         weight_dtype=weight_dtype,
         use_tf32=True,
         device=DEVICE,
     )
     masker = AutoMasker(
-        densepose_ckpt=os.path.join(CATVTON_DIR, "resource/ckpt/densepose"),
-        schp_ckpt=os.path.join(CATVTON_DIR, "resource/ckpt/schp"),
+        densepose_ckpt=os.path.join(repo_path, "DensePose"),
+        schp_ckpt=os.path.join(repo_path, "SCHP"),
         device=DEVICE,
     )
     print("Pipeline ready.")
@@ -154,12 +178,15 @@ def benchmark(pipeline, masker, person_img, garment_img):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--person",    required=True, help="Path to person image")
-    parser.add_argument("--garment",   required=True, help="Path to garment image")
+    parser.add_argument("--person",     required=True, help="Path to person image")
+    parser.add_argument("--garment",    required=True, help="Path to upper-body garment image")
+    parser.add_argument("--garment2",   default=None,  help="Path to lower-body garment (optional, runs as second pass)")
     parser.add_argument("--cloth_type", default="upper",
                         choices=["upper", "lower", "overall"])
-    parser.add_argument("--steps",     type=int, default=20)
-    parser.add_argument("--benchmark", action="store_true",
+    parser.add_argument("--steps",      type=int,   default=20)
+    parser.add_argument("--fit_delta",  type=float, default=0.0,
+                        help="Fit adjustment in inches: +3=runs large/baggy, -3=runs small/tight, 0=true to size")
+    parser.add_argument("--benchmark",  action="store_true",
                         help="Run timing sweep across step counts")
     args = parser.parse_args()
 
@@ -177,30 +204,58 @@ def main():
     if is_complex_pattern(garment_img):
         print("[WARNING] Complex pattern detected on garment — texture may not reproduce perfectly")
 
-    # ── Garment cleanup
+    # ── Garment cleanup + fit adjustment
     print("Removing garment background...")
     garment_img = clean_garment(garment_img)
+    if args.fit_delta != 0.0:
+        direction = "large (baggier)" if args.fit_delta > 0 else "small (tighter)"
+        print(f"Adjusting garment for fit delta {args.fit_delta:+.1f}\" (runs {direction})")
+        garment_img = adjust_garment_for_fit(garment_img, args.fit_delta)
     garment_img.save(os.path.join(OUTPUT_DIR, "garment_clean.jpg"))
-    print("  Saved: output/garment_clean.jpg")
+    print("  Saved: output/garment_clean.jpg  (inspect this before inference)")
 
     # ── Load model
     pipeline, masker = load_pipeline()
 
-    # ── Benchmark sweep or single pass
+    # ── Benchmark sweep or single/multi pass
     if args.benchmark:
         benchmark(pipeline, masker, person_img, garment_img)
     else:
-        print(f"Running try-on ({args.steps} steps)...")
+        total_start = time.time()
+
+        # Pass 1: upper garment (or whatever cloth_type was specified)
+        print(f"Pass 1: {args.cloth_type} garment ({args.steps} steps)...")
         start = time.time()
         result = run_tryon(
             pipeline, masker, person_img, garment_img,
             cloth_type=args.cloth_type,
             num_inference_steps=args.steps,
         )
-        elapsed = time.time() - start
+        print(f"  Done in {time.time() - start:.1f}s")
+        result.save(os.path.join(OUTPUT_DIR, "result_pass1.jpg"))
+
+        # Pass 2: lower garment (optional)
+        if args.garment2:
+            garment2_img = Image.open(args.garment2).convert("RGB")
+            if is_complex_pattern(garment2_img):
+                print("[WARNING] Complex pattern on garment2 — texture may degrade")
+            print("Removing garment2 background...")
+            garment2_img = clean_garment(garment2_img)
+            garment2_img.save(os.path.join(OUTPUT_DIR, "garment2_clean.jpg"))
+
+            print(f"Pass 2: lower garment ({args.steps} steps)...")
+            start = time.time()
+            # Feed pass 1 result as the new person image
+            result = run_tryon(
+                pipeline, masker, result, garment2_img,
+                cloth_type="lower",
+                num_inference_steps=args.steps,
+            )
+            print(f"  Done in {time.time() - start:.1f}s")
+
         out_path = os.path.join(OUTPUT_DIR, "result.jpg")
         result.save(out_path)
-        print(f"Done in {elapsed:.1f}s → {out_path}")
+        print(f"Total: {time.time() - total_start:.1f}s → {out_path}")
 
 
 if __name__ == "__main__":
