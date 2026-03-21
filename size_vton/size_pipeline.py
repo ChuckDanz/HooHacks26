@@ -58,17 +58,28 @@ class SizeVariablePipeline:
         debug: bool = False,
         skin_fill: bool = False,
         use_raw_mask: bool = False,
+        original_person_image: Image.Image = None,
+        person_mask: Image.Image = None,
+        result_masker=None,
     ) -> dict:
         """
         Args:
-            person_image:    PIL RGB
-            garment_image:   PIL RGB, should already have background removed
-            size_style:      SizeStyle enum
-            garment_category:"upper_body" | "lower_body" | "dress"
-            debug:           if True, also returns intermediate mask + scaled garment
-            skin_fill:       if True and size_style is TIGHT, replace the existing
-                             garment with the person's own sampled skin tone before
-                             CatVTON inference so the hem-reveal zone shows skin.
+            person_image:          PIL RGB (may have cleaned white background for inference)
+            garment_image:         PIL RGB, should already have background removed
+            size_style:            SizeStyle enum
+            garment_category:      "upper_body" | "lower_body" | "dress"
+            debug:                 if True, also returns intermediate mask + scaled garment
+            skin_fill:             if True and size_style is TIGHT, replace the existing
+                                   garment with the person's own sampled skin tone before
+                                   CatVTON inference so the hem-reveal zone shows skin.
+            original_person_image: if provided, composites the try-on result back onto
+                                   this image (restores original background).
+            person_mask:           fallback PIL grayscale silhouette (e.g. rembg alpha).
+                                   Used only when result_masker is not provided.
+            result_masker:         SAM2 masker (or similar) with a segment_person() method.
+                                   When provided, segments the CatVTON result itself for
+                                   compositing — matches the new rendered silhouette exactly,
+                                   handling cases where the garment changes the body outline.
 
         Returns dict:
             result_image   — PIL Image, try-on result
@@ -127,6 +138,33 @@ class SizeVariablePipeline:
             width=WIDTH,
             generator=generator,
         )[0]
+
+        # 8. Composite back onto original background.
+        #
+        #    Paste the CatVTON result onto the original (or bgfill-inpainted)
+        #    background using the person silhouette mask.  The mask is
+        #    threshold → erode → feathered to avoid blending the white
+        #    CatVTON background into the final image at edge pixels.
+        if original_person_image is not None:
+            orig_resized = resize_and_crop(original_person_image, (WIDTH, HEIGHT))
+            if result_masker is not None:
+                # Segment the CatVTON result directly — the result has a white bg so
+                # SAM2 produces a clean hard binary mask that matches the new rendered
+                # silhouette (not the original person shape, which may differ e.g. for
+                # a tight garment replacing a bulky one).
+                sil_mask = result_masker.segment_person(result)
+                orig_resized.paste(result, mask=sil_mask)
+            elif person_mask is not None:
+                # Fallback: use the pre-computed silhouette (e.g. rembg alpha)
+                sil_arr = np.array(
+                    person_mask.resize((WIDTH, HEIGHT), Image.LANCZOS).convert("L")
+                )
+                orig_resized.paste(result, mask=Image.fromarray(sil_arr))
+            else:
+                # Last resort: paste via garment inpainting mask only
+                composite_mask = smooth_mask.convert("L").point(lambda p: 255 if p > 127 else 0)
+                orig_resized.paste(result, mask=composite_mask)
+            result = orig_resized
 
         output = {
             "result_image":    result,

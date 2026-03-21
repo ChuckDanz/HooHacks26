@@ -99,6 +99,23 @@ _BG_TEMPLATES = {
     "overall": _BG_OVERALL,
 }
 
+# ── Person silhouette point templates (full-body segmentation) ────────────────
+_FG_PERSON = [
+    (0.50, 0.08),   # top of head
+    (0.50, 0.18),   # face
+    (0.50, 0.32),   # neck / upper chest
+    (0.50, 0.50),   # mid torso
+    (0.38, 0.68),   # left upper leg
+    (0.62, 0.68),   # right upper leg
+    (0.38, 0.85),   # left lower leg
+    (0.62, 0.85),   # right lower leg
+]
+_BG_PERSON = [
+    (0.02, 0.02), (0.50, 0.02), (0.98, 0.02),
+    (0.02, 0.50), (0.98, 0.50),
+    (0.02, 0.98), (0.50, 0.98), (0.98, 0.98),
+]
+
 
 def _iou(a: np.ndarray, b: np.ndarray) -> float:
     inter = (a & b).sum()
@@ -177,6 +194,40 @@ class Sam2GarmentMasker:
         result = dict(base_result)
         result["mask"] = Image.fromarray((sam2_mask * 255).astype(np.uint8), mode="L")
         return result
+
+
+    def segment_person(self, person_image: Image.Image) -> Image.Image:
+        """
+        Segment the full person body using SAM2 point prompts.
+
+        Returns a PIL L image (255 = person, 0 = background).
+        Reuses the same SAM2 predictor already loaded for garment masking.
+        """
+        image_np = np.array(person_image)
+        H, W = image_np.shape[:2]
+
+        fg_pts = [(x * W, y * H) for x, y in _FG_PERSON]
+        bg_pts = [(x * W, y * H) for x, y in _BG_PERSON]
+        coords = np.array(fg_pts + bg_pts, dtype=np.float32)
+        labels = np.array(
+            [1] * len(fg_pts) + [0] * len(bg_pts), dtype=np.int32
+        )
+
+        with torch.inference_mode():
+            self.predictor.set_image(image_np)
+            masks, _, _ = self.predictor.predict(
+                point_coords=coords,
+                point_labels=labels,
+                multimask_output=True,
+            )
+
+        # Pick the largest mask — should be the full body
+        best_mask = masks[max(range(len(masks)), key=lambda i: masks[i].sum())]
+
+        # Fill interior holes (armpit gaps, etc.) without using convex hull
+        filled = binary_fill_holes(best_mask).astype(np.uint8) * 255
+        print(f"  [SAM2 person] segmented {filled.sum() // 255} px")
+        return Image.fromarray(filled, mode="L")
 
 
 # Alias so existing code using Sam3GarmentMasker still works

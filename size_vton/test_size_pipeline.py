@@ -107,32 +107,100 @@ def main():
                         help="CFG guidance scale (default 2.5; raise to 4-6 for stronger color transfer)")
     parser.add_argument("--sam2", action="store_true",
                         help="Use SAM2 for clean garment mask instead of SCHP blob")
+    parser.add_argument("--sam2b", action="store_true",
+                        help="Use SAM2 to segment person from background before inference "
+                             "and composite back onto original background after (no rembg needed for person)")
     parser.add_argument("--default", action="store_true",
                         help="Also run a pure CatVTON default pass (no size manipulation) for comparison")
     parser.add_argument("--clean", action="store_true",
                         help="Remove garment background and replace with white (uses rembg)")
+    parser.add_argument("--bgfill", action="store_true",
+                        help="Inpaint the background where the person was (LaMa) before compositing "
+                             "so the final background has no person-shaped hole. Requires --clean.")
     args = parser.parse_args()
 
     person_img  = Image.open(args.person).convert("RGB")
     garment_img = Image.open(args.garment).convert("RGB")
 
+    # Keep the original person image for final compositing (background restore)
+    original_person_img  = person_img
+    person_silhouette    = None   # silhouette mask used for post-inference compositing
+
     if args.clean:
-        from rembg import remove as rembg_remove
+        import gc
+        from rembg import new_session, remove as rembg_remove
+
+        session = new_session()
+
         print("Cleaning garment background...")
-        rgba = rembg_remove(garment_img)
+        rgba = rembg_remove(garment_img, session=session)
         white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
         white.paste(rgba, mask=rgba.split()[3])
         garment_img = white.convert("RGB")
-        clean_path = os.path.join(OUTPUT_DIR, "garment_clean.jpg")
-        garment_img.save(clean_path)
-        print(f"  Saved cleaned garment → {clean_path}")
+        garment_img.save(os.path.join(OUTPUT_DIR, "garment_clean.jpg"))
+        print(f"  Saved cleaned garment → {os.path.join(OUTPUT_DIR, 'garment_clean.jpg')}")
+
+        if not args.sam2b:
+            # rembg handles person bg removal when --sam2b is not set
+            print("Cleaning person background with rembg (original bg restored in output)...")
+            rgba = rembg_remove(person_img, session=session)
+            person_silhouette = rgba.split()[3]
+            white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            white.paste(rgba, mask=person_silhouette)
+            person_img = white.convert("RGB")
+            person_img.save(os.path.join(OUTPUT_DIR, "person_clean.jpg"))
+            print(f"  Saved cleaned person → {os.path.join(OUTPUT_DIR, 'person_clean.jpg')}")
+
+        del session, rgba, white
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("  rembg memory freed.")
+
+    # --bgfill: use LaMa to inpaint background where the person stood,
+    # so the final composite has a complete background (no person-shaped hole).
+    # Must run after rembg (we need person_silhouette) and before loading CatVTON.
+    if args.bgfill:
+        if person_silhouette is None:
+            print("WARNING: --bgfill requires --clean (need person silhouette). Skipping bgfill.")
+        else:
+            import cv2
+            import numpy as np
+            print("Inpainting background with cv2.inpaint...")
+            person_np = np.array(original_person_img)
+            # Binarize mask: rembg alpha is soft, cv2.inpaint needs hard 0/255
+            mask_np = np.array(person_silhouette.convert("L"))
+            mask_bin = (mask_np > 10).astype(np.uint8) * 255
+            # Dilate slightly so edge fringe pixels are also filled
+            mask_bin = cv2.dilate(mask_bin, np.ones((5, 5), np.uint8), iterations=2)
+            inpainted = cv2.inpaint(person_np, mask_bin, inpaintRadius=20, flags=cv2.INPAINT_TELEA)
+            bg_filled = Image.fromarray(inpainted)
+            bg_filled.save(os.path.join(OUTPUT_DIR, "bg_inpaint.jpg"))
+            print(f"  Inpainted background → {os.path.join(OUTPUT_DIR, 'bg_inpaint.jpg')}")
+            original_person_img = bg_filled
 
     pipeline, masker = load_models()
 
-    # Wrap masker with SAM2 now so both preview and inference use it
-    if args.sam2:
+    # Load SAM2 once — reused for garment masking (--sam2) and/or bg segmentation (--sam2b)
+    sam2_wrapper = None
+    if args.sam2 or args.sam2b:
         from sam2_masker import Sam2GarmentMasker
-        masker = Sam2GarmentMasker(masker, device=DEVICE)
+        sam2_wrapper = Sam2GarmentMasker(masker, device=DEVICE)
+
+    # --sam2b: SAM2 segments the CatVTON result for compositing (not the original person).
+    # This matches the new rendered silhouette exactly, handling garment outline changes.
+    # Without --clean, also generates the white-bg inference image.
+    if args.sam2b and not args.clean:
+        print("Segmenting person from background with SAM2...")
+        person_silhouette = sam2_wrapper.segment_person(person_img)
+        white = Image.new("RGB", person_img.size, (255, 255, 255))
+        white.paste(person_img, mask=person_silhouette)
+        person_img = white
+        person_img.save(os.path.join(OUTPUT_DIR, "person_sam2b_clean.jpg"))
+        print(f"  Saved SAM2 person → {os.path.join(OUTPUT_DIR, 'person_sam2b_clean.jpg')}")
+
+    # --sam2: use SAM2-enhanced masker for garment inpainting mask
+    if args.sam2:
+        masker = sam2_wrapper
 
     styles = [SizeStyle.TIGHT, SizeStyle.FITTED, SizeStyle.LOOSE]
 
@@ -164,6 +232,9 @@ def main():
             guidance_scale=args.guidance,
             debug=True,
             use_raw_mask=True,
+            original_person_image=original_person_img if (args.clean or args.sam2b) else None,
+            person_mask=person_silhouette,
+            result_masker=sam2_wrapper if args.sam2b else None,
         )
         elapsed = time.time() - start
         result_with_badge = add_fit_badge(out["result_image"], "default")
@@ -183,6 +254,9 @@ def main():
             guidance_scale=args.guidance,
             debug=True,
             skin_fill=args.skin_strip,
+            original_person_image=original_person_img if (args.clean or args.sam2b) else None,
+            person_mask=person_silhouette,
+            result_masker=sam2_wrapper if args.sam2b else None,
         )
         elapsed = time.time() - start
 
