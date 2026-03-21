@@ -40,7 +40,8 @@ BASE_CKPT      = "runwayml/stable-diffusion-inpainting"
 OUTPUT_DIR     = os.path.join(os.path.dirname(__file__), "..", "output", "size_test")
 DEVICE         = "cuda" if torch.cuda.is_available() else "cpu"
 MIXED_PREC     = "bf16"
-STEPS          = 20
+STEPS          = 30
+GUIDANCE_SCALE = 2.5
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -101,15 +102,30 @@ def main():
                         help="Preview masks without running inference (fast)")
     parser.add_argument("--skin_strip", action="store_true",
                         help="Two-pass: strip existing shirt with SD inpainting before TIGHT inference")
-    parser.add_argument("--steps", type=int, default=STEPS)
+    parser.add_argument("--steps",    type=int,   default=STEPS)
+    parser.add_argument("--guidance", type=float, default=GUIDANCE_SCALE,
+                        help="CFG guidance scale (default 2.5; raise to 4-6 for stronger color transfer)")
     parser.add_argument("--sam2", action="store_true",
                         help="Use SAM2 for clean garment mask instead of SCHP blob")
     parser.add_argument("--default", action="store_true",
                         help="Also run a pure CatVTON default pass (no size manipulation) for comparison")
+    parser.add_argument("--clean", action="store_true",
+                        help="Remove garment background and replace with white (uses rembg)")
     args = parser.parse_args()
 
     person_img  = Image.open(args.person).convert("RGB")
     garment_img = Image.open(args.garment).convert("RGB")
+
+    if args.clean:
+        from rembg import remove as rembg_remove
+        print("Cleaning garment background...")
+        rgba = rembg_remove(garment_img)
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        white.paste(rgba, mask=rgba.split()[3])
+        garment_img = white.convert("RGB")
+        clean_path = os.path.join(OUTPUT_DIR, "garment_clean.jpg")
+        garment_img.save(clean_path)
+        print(f"  Saved cleaned garment → {clean_path}")
 
     pipeline, masker = load_models()
 
@@ -145,6 +161,7 @@ def main():
             size_style=SizeStyle.FITTED,
             garment_category=args.category,
             num_inference_steps=args.steps,
+            guidance_scale=args.guidance,
             debug=True,
             use_raw_mask=True,
         )
@@ -163,6 +180,7 @@ def main():
             size_style=style,
             garment_category=args.category,
             num_inference_steps=args.steps,
+            guidance_scale=args.guidance,
             debug=True,
             skin_fill=args.skin_strip,
         )

@@ -1,8 +1,9 @@
 """
-Sam2GarmentMasker — uses SAM2.1-large with point prompts for garment segmentation.
+Sam2GarmentMasker — uses SAM2.1-large with point prompts for torso segmentation.
 
-FG points are derived from the SCHP mask centroid.
-BG points exclude head, edges, and irrelevant body parts.
+FG points densely cover the entire torso region so SAM2 segments the full trunk,
+not just where the SCHP blob happens to land.
+BG points exclude head, legs, arms, and image edges.
 Falls back to SCHP blob if SAM2 returns no useful mask.
 
 Same call interface as AutoMasker:
@@ -19,33 +20,83 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 _MIN_IOU_FALLBACK = 0.10
 _SAM2_MODEL      = "facebook/sam2.1-hiera-large"
 
-# Background point templates (normalized x, y — 0=left/top, 1=right/bottom).
-# Applied for upper/overall garments to exclude head and image edges.
+# ── Foreground point templates (normalized x, y) ─────────────────────────────
+# Dense grid across the full torso: shoulders → waist.
+_FG_UPPER = [
+    (0.50, 0.30),   # upper chest center
+    (0.32, 0.33),   # left chest
+    (0.68, 0.33),   # right chest
+    (0.50, 0.42),   # mid chest
+    (0.30, 0.45),   # left mid torso
+    (0.70, 0.45),   # right mid torso
+    (0.50, 0.52),   # belly center
+    (0.32, 0.55),   # left waist
+    (0.68, 0.55),   # right waist
+    (0.20, 0.38),   # left shoulder
+    (0.80, 0.38),   # right shoulder
+]
+
+# Lower body: cover thighs and legs
+_FG_LOWER = [
+    (0.35, 0.60),   # left upper thigh
+    (0.65, 0.60),   # right upper thigh
+    (0.35, 0.72),   # left mid thigh
+    (0.65, 0.72),   # right mid thigh
+    (0.35, 0.83),   # left knee
+    (0.65, 0.83),   # right knee
+    (0.50, 0.65),   # crotch/center
+]
+
+# Overall (dress): union of torso + legs
+_FG_OVERALL = _FG_UPPER + _FG_LOWER
+
+# ── Background point templates ────────────────────────────────────────────────
 _BG_UPPER = [
-    (0.50, 0.07),   # top center (head crown)
-    (0.50, 0.14),   # mid head
-    (0.20, 0.11),   # left temple
-    (0.80, 0.11),   # right temple
-    (0.50, 0.20),   # lower face / chin
-    (0.02, 0.30),   # far left edge
-    (0.98, 0.30),   # far right edge
+    (0.50, 0.06),   # head crown
+    (0.50, 0.13),   # mid head
+    (0.20, 0.10),   # left temple
+    (0.80, 0.10),   # right temple
+    (0.50, 0.21),   # chin / lower face
+    (0.02, 0.35),   # far left edge
+    (0.98, 0.35),   # far right edge
     (0.02, 0.55),   # mid left edge
     (0.98, 0.55),   # mid right edge
+    (0.35, 0.75),   # left leg
+    (0.65, 0.75),   # right leg
+    (0.50, 0.85),   # lower body
 ]
 
-# For lower body: exclude torso + head, keep legs
 _BG_LOWER = [
-    (0.50, 0.07),
-    (0.50, 0.14),
-    (0.50, 0.30),   # torso center
-    (0.02, 0.50),
-    (0.98, 0.50),
+    (0.50, 0.06),   # head crown
+    (0.50, 0.13),   # mid head
+    (0.50, 0.28),   # torso center
+    (0.30, 0.35),   # left torso
+    (0.70, 0.35),   # right torso
+    (0.02, 0.55),   # far left edge
+    (0.98, 0.55),   # far right edge
 ]
 
+_BG_OVERALL = [
+    (0.50, 0.06),
+    (0.50, 0.13),
+    (0.20, 0.10),
+    (0.80, 0.10),
+    (0.50, 0.21),
+    (0.02, 0.35),
+    (0.98, 0.35),
+    (0.02, 0.65),
+    (0.98, 0.65),
+]
+
+_FG_TEMPLATES = {
+    "upper":   _FG_UPPER,
+    "lower":   _FG_LOWER,
+    "overall": _FG_OVERALL,
+}
 _BG_TEMPLATES = {
     "upper":   _BG_UPPER,
     "lower":   _BG_LOWER,
-    "overall": _BG_UPPER,
+    "overall": _BG_OVERALL,
 }
 
 
@@ -55,44 +106,13 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
     return float(inter) / float(union) if union > 0 else 0.0
 
 
-def _schp_fg_points(mask_np: np.ndarray, cloth_type: str):
-    """
-    Derive 1-3 foreground points from the SCHP garment blob.
-    Returns list of (x, y) pixel coordinates.
-    """
-    H, W = mask_np.shape
-    ys, xs = np.where(mask_np)
-    if len(xs) == 0:
-        return [(W * 0.5, H * 0.45)]   # safe fallback
-
-    pts = []
-    # Upper-half centroid (avoids hem dragging point toward belt)
-    upper_mask = mask_np[:H // 2]
-    uy, ux = np.where(upper_mask)
-    if len(ux) > 0:
-        pts.append((float(ux.mean()), float(uy.mean())))
-
-    # Full centroid
-    pts.append((float(xs.mean()), float(ys.mean())))
-
-    # For lower body, also add lower-half centroid to capture legs
-    if cloth_type == "lower":
-        lower_mask = mask_np[H // 2:]
-        ly, lx = np.where(lower_mask)
-        if len(lx) > 0:
-            pts.append((float(lx.mean()), float(ly.mean()) + H // 2))
-
-    return pts
-
-
 class Sam2GarmentMasker:
     """
     Wraps AutoMasker + SAM2.1-large.
 
-    AutoMasker provides the SCHP blob used to:
-      - derive foreground point prompts for SAM2
-      - validate the returned mask (IoU check)
-      - serve as fallback if SAM2 fails
+    SAM2 is prompted with a dense hardcoded grid of FG points covering the
+    full torso (shoulders → waist) and BG points excluding head/legs/edges.
+    AutoMasker's SCHP blob is used only for IoU validation and fallback.
     """
 
     def __init__(self, base_masker, device: str = "cuda"):
@@ -110,12 +130,11 @@ class Sam2GarmentMasker:
         base_np     = (np.array(base_result["mask"]) > 127)
 
         H, W = base_np.shape
-        ct   = cloth_type if cloth_type in _BG_TEMPLATES else "upper"
+        ct   = cloth_type if cloth_type in _FG_TEMPLATES else "upper"
 
-        # 2. Build point prompts
-        fg_pts  = _schp_fg_points(base_np, ct)
-        bg_tmpl = _BG_TEMPLATES[ct]
-        bg_pts  = [(x * W, y * H) for x, y in bg_tmpl]
+        # 2. Build point prompts — dense torso FG grid + exclusion BG points
+        fg_pts = [(x * W, y * H) for x, y in _FG_TEMPLATES[ct]]
+        bg_pts = [(x * W, y * H) for x, y in _BG_TEMPLATES[ct]]
 
         coords = np.array(fg_pts + bg_pts, dtype=np.float32)
         labels = np.array(
