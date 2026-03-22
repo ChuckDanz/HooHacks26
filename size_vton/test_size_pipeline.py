@@ -24,7 +24,7 @@ import torch
 from PIL import Image
 from huggingface_hub import snapshot_download
 
-from model.pipeline import CatVTONPipeline
+from model.pipeline import CatVTONPipeline, CatVTONPix2PixPipeline
 from model.cloth_masker import AutoMasker
 from utils import init_weight_dtype
 
@@ -37,6 +37,7 @@ from fit_utils import add_fit_badge, make_comparison_grid
 
 ATTN_CKPT      = "zhengchong/CatVTON"
 BASE_CKPT      = "runwayml/stable-diffusion-inpainting"
+BASE_CKPT_P2P  = "timbrooks/instruct-pix2pix"
 OUTPUT_DIR     = os.path.join(os.path.dirname(__file__), "..", "output", "size_test")
 DEVICE         = "cuda" if torch.cuda.is_available() else "cpu"
 MIXED_PREC     = "bf16"
@@ -47,7 +48,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def load_models():
-    print("Loading CatVTON...")
+    print("Loading CatVTON (inpainting)...")
     repo_path = snapshot_download(repo_id=ATTN_CKPT)
     weight_dtype = init_weight_dtype(MIXED_PREC)
     pipeline = CatVTONPipeline(
@@ -57,6 +58,29 @@ def load_models():
         weight_dtype=weight_dtype,
         use_tf32=True,
         device=DEVICE,
+        skip_safety_check=True,
+    )
+    masker = AutoMasker(
+        densepose_ckpt=os.path.join(repo_path, "DensePose"),
+        schp_ckpt=os.path.join(repo_path, "SCHP"),
+        device=DEVICE,
+    )
+    return pipeline, masker
+
+
+def load_models_p2p():
+    print("Loading CatVTON-Pix2Pix (in-the-wild, mask-free)...")
+    # Pix2Pix attn weights are in the same zhengchong/CatVTON repo under mix-48k-1024/
+    repo_path    = snapshot_download(repo_id=ATTN_CKPT)
+    weight_dtype = init_weight_dtype(MIXED_PREC)
+    pipeline = CatVTONPix2PixPipeline(
+        base_ckpt=BASE_CKPT_P2P,
+        attn_ckpt=repo_path,
+        attn_ckpt_version="mix-48k-1024",
+        weight_dtype=weight_dtype,
+        use_tf32=True,
+        device=DEVICE,
+        skip_safety_check=True,
     )
     masker = AutoMasker(
         densepose_ckpt=os.path.join(repo_path, "DensePose"),
@@ -117,10 +141,17 @@ def main():
     parser.add_argument("--bgfill", action="store_true",
                         help="Inpaint the background where the person was (LaMa) before compositing "
                              "so the final background has no person-shaped hole. Requires --clean.")
+    parser.add_argument("--p2p", action="store_true",
+                        help="Use CatVTON-Pix2Pix (in-the-wild, mask-free) instead of inpainting pipeline")
+    parser.add_argument("--esrgan", action="store_true",
+                        help="Apply Real-ESRGAN x4 sharpening to each result (recovers VAE-decode blur)")
+    parser.add_argument("--jnco", action="store_true",
+                        help="Add JNCO wide-leg style to the inference run (forces --category lower_body)")
     args = parser.parse_args()
 
-    person_img  = Image.open(args.person).convert("RGB")
-    garment_img = Image.open(args.garment).convert("RGB")
+    from PIL import ImageOps
+    person_img  = ImageOps.exif_transpose(Image.open(args.person)).convert("RGB")
+    garment_img = ImageOps.exif_transpose(Image.open(args.garment)).convert("RGB")
 
     # Keep the original person image for final compositing (background restore)
     original_person_img  = person_img
@@ -178,7 +209,12 @@ def main():
             print(f"  Inpainted background → {os.path.join(OUTPUT_DIR, 'bg_inpaint.jpg')}")
             original_person_img = bg_filled
 
-    pipeline, masker = load_models()
+    pipeline, masker = load_models_p2p() if args.p2p else load_models()
+
+    upscaler = None
+    if args.esrgan:
+        from esrgan_upscaler import RealESRGANUpscaler
+        upscaler = RealESRGANUpscaler(device=DEVICE)
 
     # Load SAM2 once — reused for garment masking (--sam2) and/or bg segmentation (--sam2b)
     sam2_wrapper = None
@@ -203,6 +239,9 @@ def main():
         masker = sam2_wrapper
 
     styles = [SizeStyle.TIGHT, SizeStyle.FITTED, SizeStyle.LOOSE]
+    if args.jnco:
+        styles.append(SizeStyle.JNCO)
+        args.category = "lower_body"   # JNCO is always lower body
 
     # ── Mask preview (no GPU inference) ──
     print("\n── Mask previews ────────────────────────────────────")
@@ -235,6 +274,7 @@ def main():
             original_person_image=original_person_img if (args.clean or args.sam2b) else None,
             person_mask=person_silhouette,
             result_masker=sam2_wrapper if args.sam2b else None,
+            upscaler=upscaler,
         )
         elapsed = time.time() - start
         result_with_badge = add_fit_badge(out["result_image"], "default")
@@ -257,6 +297,7 @@ def main():
             original_person_image=original_person_img if (args.clean or args.sam2b) else None,
             person_mask=person_silhouette,
             result_masker=sam2_wrapper if args.sam2b else None,
+            upscaler=upscaler,
         )
         elapsed = time.time() - start
 

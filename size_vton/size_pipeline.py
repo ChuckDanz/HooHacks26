@@ -42,9 +42,11 @@ class SizeVariablePipeline:
     """
 
     def __init__(self, catvton_pipeline, masker, use_sam2: bool = False):
-        self.pipeline = catvton_pipeline
-        self.masker   = Sam2GarmentMasker(masker, device=DEVICE) if use_sam2 else masker
-        self.mask_gen = MaskGenerator()
+        self.pipeline  = catvton_pipeline
+        self.masker    = Sam2GarmentMasker(masker, device=DEVICE) if use_sam2 else masker
+        self.mask_gen  = MaskGenerator()
+        # Pix2Pix pipeline takes no mask parameter
+        self.is_p2p    = type(catvton_pipeline).__name__ == "CatVTONPix2PixPipeline"
 
     def run(
         self,
@@ -61,6 +63,7 @@ class SizeVariablePipeline:
         original_person_image: Image.Image = None,
         person_mask: Image.Image = None,
         result_masker=None,
+        upscaler=None,
     ) -> dict:
         """
         Args:
@@ -96,9 +99,13 @@ class SizeVariablePipeline:
         }
         cloth_type = cloth_type_map.get(garment_category, "upper")
 
-        # 1. Resize inputs to model dimensions
-        person_resized  = resize_and_crop(person_image, (WIDTH, HEIGHT))
-        garment_resized = resize_and_padding(garment_image, (WIDTH, HEIGHT))
+        # 1. Resize inputs to model dimensions.
+        #    Upscale garment 2× first (LANCZOS) so the subsequent downscale to
+        #    768×1024 preserves fine detail (logos, texture, stitching).
+        person_resized = resize_and_crop(person_image, (WIDTH, HEIGHT))
+        gw, gh = garment_image.size
+        garment_up     = garment_image.resize((gw * 2, gh * 2), Image.LANCZOS)
+        garment_resized = resize_and_padding(garment_up, (WIDTH, HEIGHT))
 
         # 2. Generate base mask via AutoMasker
         base_mask = self.masker(person_resized, cloth_type)["mask"]
@@ -127,19 +134,33 @@ class SizeVariablePipeline:
             )
 
         # 7. CatVTON inference
+        torch.cuda.empty_cache()
+        if hasattr(self.pipeline, "enable_attention_slicing"):
+            self.pipeline.enable_attention_slicing()
         generator = torch.Generator(device=DEVICE).manual_seed(seed)
-        result = self.pipeline(
+        call_kwargs = dict(
             image=person_resized,
             condition_image=scaled_garment,
-            mask=smooth_mask,
             num_inference_steps=num_inference_steps,
+        )
+        if not self.is_p2p:
+            call_kwargs["mask"] = smooth_mask
+        result = self.pipeline(
+            **call_kwargs,
             guidance_scale=guidance_scale,
             height=HEIGHT,
             width=WIDTH,
             generator=generator,
         )[0]
 
-        # 8. Composite back onto original background.
+        # 8. Real-ESRGAN sharpening (optional).
+        #    Upscale 4× then resize back to 768×1024 so downstream compositing
+        #    works at the same resolution while recovering VAE-decode blur.
+        if upscaler is not None:
+            print("  [ESRGAN] Upscaling result...")
+            result = upscaler.upscale(result, out_size=(WIDTH, HEIGHT))
+
+        # 9. Composite back onto original background.
         #
         #    Paste the CatVTON result onto the original (or bgfill-inpainted)
         #    background using the person silhouette mask.  The mask is

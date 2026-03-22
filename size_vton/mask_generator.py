@@ -9,6 +9,7 @@ class SizeStyle(Enum):
     FITTED    = "fitted"     # No manipulation — model default
     LOOSE     = "loose"      # Dilate mask — garment covers more body area
     OVERSIZED = "oversized"  # Maximum dilate
+    JNCO      = "jnco"       # Extreme horizontal dilation — wide-leg / JNCO silhouette
 
 
 # Tunable parameters — adjust these experimentally on your test images
@@ -38,6 +39,15 @@ SIZE_PARAMS = {
         "dilate_iter":    3,
         "height_add":   0.10,
     },
+    SizeStyle.JNCO: {
+        # Very wide horizontal kernel blows the legs outward aggressively.
+        # Tall kernel is small so we don't add much vertical height.
+        "h_kernel":    90,   # px — lateral expansion per side
+        "h_iter":       3,   # passes → each pass adds ~90px per side
+        "v_kernel":    12,   # px — mild downward extension
+        "v_iter":       1,
+        "height_add":  0.08, # 8% extra length at the hem
+    },
 }
 
 # How much to scale the garment image to match the mask manipulation.
@@ -48,6 +58,13 @@ GARMENT_SCALE = {
     SizeStyle.FITTED:    1.00,
     SizeStyle.LOOSE:     1.18,   # larger fabric image → CatVTON renders it looser
     SizeStyle.OVERSIZED: 1.28,
+    SizeStyle.JNCO:      1.00,   # non-uniform scale handled separately via JNCO_SCALE
+}
+
+# Non-uniform garment rescale for JNCO — stretch wide, barely taller.
+JNCO_SCALE = {
+    "width":  1.8,   # 80% wider than the standard pants garment image
+    "height": 1.05,  # just slightly longer
 }
 
 
@@ -108,14 +125,14 @@ class MaskGenerator:
             kernel = np.ones((k, k), np.uint8)
             eroded = cv2.erode(binary, kernel, iterations=params["erode_iter"])
 
-            # Raise hem — crop based on ORIGINAL height for a dramatic visible difference
-            crop_frac = params["height_crop"]
+            # Raise hem (upper_body) / minimal crop (lower_body — don't shorten pants)
+            crop_frac = 0.05 if garment_category == "lower_body" else params["height_crop"]
             if crop_frac > 0 and orig_height > 0:
                 crop_px = int(orig_height * crop_frac)
                 eroded[orig_bottom - crop_px:, :] = 0
 
-            # Lower neckline — also relative to original height
-            top_frac = params.get("top_crop", 0.0)
+            # Lower neckline (upper_body only — top_crop has no useful meaning for pants)
+            top_frac = 0.0 if garment_category == "lower_body" else params.get("top_crop", 0.0)
             if top_frac > 0 and orig_height > 0:
                 top_px = int(orig_height * top_frac)
                 eroded[:orig_top + top_px, :] = 0
@@ -171,6 +188,40 @@ class MaskGenerator:
 
             return (dilated * 255).astype(np.uint8)
 
+        if size_style == SizeStyle.JNCO:
+            p = params
+            # 1. Massive horizontal dilation — wide-leg silhouette
+            h_kernel = np.ones((5, p["h_kernel"]), np.uint8)   # tall=5 keeps vertical stable
+            wide = cv2.dilate(binary, h_kernel, iterations=p["h_iter"])
+
+            # 2. Mild vertical dilation — slightly longer hem
+            v_kernel = np.ones((p["v_kernel"], 3), np.uint8)
+            wide = cv2.dilate(wide, v_kernel, iterations=p["v_iter"])
+
+            # 3. Clamp top — don't let the lateral blowout creep into the torso.
+            #    Find the original top of the pants mask and zero everything above it.
+            orig_rows = np.where(binary.sum(axis=1) > 0)[0]
+            if len(orig_rows) > 0:
+                wide[:orig_rows[0], :] = 0
+
+            # 4. Extend hem downward (same logic as LOOSE)
+            add_frac = p["height_add"]
+            H = wide.shape[0]
+            rows_with_mask = np.where(wide.sum(axis=1) > 0)[0]
+            if add_frac > 0 and len(rows_with_mask) > 0:
+                top_of_mask    = rows_with_mask[0]
+                bottom_of_mask = rows_with_mask[-1]
+                mask_height    = bottom_of_mask - top_of_mask
+                add_px         = int(mask_height * add_frac)
+                new_bottom     = min(H, bottom_of_mask + add_px)
+                avg_width = int(wide[max(0, bottom_of_mask - 5):bottom_of_mask + 1].sum(axis=1).mean())
+                center_x  = wide.shape[1] // 2
+                x0 = max(0, center_x - avg_width // 2)
+                x1 = min(wide.shape[1], center_x + avg_width // 2)
+                wide[bottom_of_mask:new_bottom, x0:x1] = 1
+
+            return (wide * 255).astype(np.uint8)
+
         return (binary * 255).astype(np.uint8)
 
     @staticmethod
@@ -192,14 +243,20 @@ class MaskGenerator:
         Scale garment image to give CatVTON a better prior for fit.
         TIGHT: scale down (smaller garment → model renders it tighter)
         LOOSE: scale up  (larger garment → model renders it looser)
+        JNCO:  non-uniform stretch — 1.8× wide, 1.05× tall
         Returns image at same canvas size, centered on white background.
         """
-        scale = GARMENT_SCALE[size_style]
-        if scale == 1.0:
-            return garment_img
-
         w, h = garment_img.size
-        new_w, new_h = int(w * scale), int(h * scale)
+
+        if size_style == SizeStyle.JNCO:
+            new_w = int(w * JNCO_SCALE["width"])
+            new_h = int(h * JNCO_SCALE["height"])
+        else:
+            scale = GARMENT_SCALE[size_style]
+            if scale == 1.0:
+                return garment_img
+            new_w, new_h = int(w * scale), int(h * scale)
+
         resized = garment_img.resize((new_w, new_h), Image.LANCZOS)
 
         canvas = Image.new("RGB", (w, h), (255, 255, 255))

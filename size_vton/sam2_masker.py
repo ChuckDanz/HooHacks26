@@ -13,7 +13,7 @@ Same call interface as AutoMasker:
 import numpy as np
 import torch
 from PIL import Image
-from scipy.ndimage import binary_fill_holes
+from scipy.ndimage import binary_fill_holes, binary_closing
 
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
@@ -36,15 +36,30 @@ _FG_UPPER = [
     (0.80, 0.38),   # right shoulder
 ]
 
-# Lower body: cover thighs and legs
+# Lower body: cover thighs, inner gap, and full leg length
 _FG_LOWER = [
-    (0.35, 0.60),   # left upper thigh
-    (0.65, 0.60),   # right upper thigh
-    (0.35, 0.72),   # left mid thigh
-    (0.65, 0.72),   # right mid thigh
-    (0.35, 0.83),   # left knee
-    (0.65, 0.83),   # right knee
-    (0.50, 0.65),   # crotch/center
+    # Upper thigh / hip band
+    (0.35, 0.58),   # left upper thigh
+    (0.65, 0.58),   # right upper thigh
+    (0.50, 0.58),   # center hip
+    # Crotch / inner thigh gap — critical for connecting the two legs
+    (0.50, 0.63),   # crotch center
+    (0.42, 0.63),   # inner left thigh
+    (0.58, 0.63),   # inner right thigh
+    # Mid thigh
+    (0.35, 0.70),   # left mid thigh
+    (0.65, 0.70),   # right mid thigh
+    (0.42, 0.70),   # inner left mid
+    (0.58, 0.70),   # inner right mid
+    # Knee band
+    (0.35, 0.80),   # left knee
+    (0.65, 0.80),   # right knee
+    # Calf / lower leg
+    (0.35, 0.88),   # left calf
+    (0.65, 0.88),   # right calf
+    # Ankle
+    (0.37, 0.95),   # left ankle
+    (0.63, 0.95),   # right ankle
 ]
 
 # Overall (dress): union of torso + legs
@@ -183,6 +198,10 @@ class Sam2GarmentMasker:
             return base_result
 
         # 6. Fill interior holes + hard head-exclusion clip
+        # For lower body: close the gap between the two legs before filling holes
+        # so the inner-thigh region (between the pants legs) gets included.
+        if ct == "lower":
+            best_mask = binary_closing(best_mask, structure=np.ones((25, 25)))
         sam2_mask = binary_fill_holes(best_mask).astype(np.uint8)
         sam2_mask[:int(H * 0.22), :] = 0
 
