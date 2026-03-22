@@ -4,6 +4,7 @@ import Hero from './components/Hero';
 import Preferences from './components/Preferences';
 import TryOn from './components/TryOn';
 import { getOrCreateSession } from './utils/session';
+import CustomCursor from './components/CustomCursor';
 
 export type FlowStage = 'hero' | 'preferences' | 'tryon';
 
@@ -22,6 +23,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full relative overflow-hidden">
+      <CustomCursor />
       <div className="fixed top-0 left-0 w-full h-16 bg-white/90 backdrop-blur-md z-50 flex items-center justify-center border-b border-royal-blue/20">
         <div className="flex gap-12 text-2xl font-covered tracking-widest uppercase">
           <button onClick={() => setStage('hero')} className={`transition-all ${stage === 'hero' ? 'text-envision-pink' : 'text-royal-blue/30 hover:text-royal-blue'}`}>START</button>

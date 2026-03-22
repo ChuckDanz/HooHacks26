@@ -24,6 +24,7 @@
 @layer base {
   body {
     @apply bg-[#fdfdfb] text-black overflow-x-hidden min-h-screen;
+    cursor: none;
     background-image: 
       linear-gradient(var(--color-grid-line) 1px, transparent 1px),
       linear-gradient(90deg, var(--color-grid-line) 1px, transparent 1px);
@@ -171,4 +172,9 @@
   @apply absolute w-24 h-8 bg-white/30 backdrop-blur-sm -rotate-12 z-20;
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   border: 1px solid rgba(255,255,255,0.2);
+}
+
+.fallback-cursor,
+.fallback-cursor * {
+  cursor: auto !important;
 }
