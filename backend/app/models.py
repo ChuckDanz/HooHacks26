@@ -10,6 +10,7 @@ class CartItem(BaseModel):
     image_url: str
     product_url: str
     retailer: str
+    category: str = "upper_body"   # 'upper_body' | 'lower_body' | 'dress'
     price: Optional[str] = None
     size: Optional[str] = None
     added_at: float = 0.0

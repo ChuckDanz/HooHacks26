@@ -140,6 +140,11 @@
       return;
     }
 
+    // Infer category from product name
+    const lower = (item.name || '').toLowerCase();
+    const isBottom = /\b(pant|jean|denim|trouser|short|skirt|legging|bottom|chino|jogger|cargo)\b/.test(lower);
+    item.category = isBottom ? 'lower_body' : 'upper_body';
+
     // Add a UUID so Aerospike / background can deduplicate
     item.id = crypto.randomUUID();
     item.added_at = Date.now() / 1000;

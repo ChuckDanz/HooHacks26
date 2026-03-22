@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Shirt, Loader2, AlertCircle, Upload, ChevronLeft, ChevronRight } from 'lucide-react';
-import { getCartItems, tryOnGarment, cachePerson, categoryToTab, tabToCategory, type CartItem } from '../utils/api';
+import { getCartItems, removeCartItem, tryOnGarment, cachePerson, categoryToTab, tabToCategory, type CartItem } from '../utils/api';
 
 interface FitVariant { label: string; img: string; }
 
@@ -74,8 +74,10 @@ function BeforeAfterSlider({ beforeImg, afterImg }: { beforeImg: string; afterIm
           <ChevronRight size={12} className="text-royal-blue/60" />
         </div>
       </div>
-      <div className="absolute bottom-3 left-3 z-10 bg-black/50 text-white font-pixel text-[8px] px-2 py-0.5 rounded pointer-events-none">ORIGINAL</div>
-      <div className="absolute bottom-3 right-3 z-10 bg-envision-pink/80 text-white font-pixel text-[8px] px-2 py-0.5 rounded pointer-events-none">AI TRY-ON</div>
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex gap-2 pointer-events-none">
+        <span className="bg-black/50 text-white font-pixel text-[8px] px-2 py-0.5 rounded">ORIGINAL</span>
+        <span className="bg-envision-pink/80 text-white font-pixel text-[8px] px-2 py-0.5 rounded">AI TRY-ON</span>
+      </div>
     </div>
   );
 }
@@ -116,8 +118,10 @@ function FitSwitcherSlider({ beforeImg, fitVariants }: { beforeImg: string; fitV
           <ChevronRight size={12} className="text-royal-blue/60" />
         </div>
       </div>
-      <div className="absolute bottom-10 left-3 z-10 bg-black/50 text-white font-pixel text-[8px] px-2 py-0.5 rounded pointer-events-none">ORIGINAL</div>
-      <div className="absolute bottom-10 right-3 z-10 bg-envision-pink/80 text-white font-pixel text-[8px] px-2 py-0.5 rounded pointer-events-none">AI TRY-ON</div>
+      <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-10 flex gap-2 pointer-events-none">
+        <span className="bg-black/50 text-white font-pixel text-[8px] px-2 py-0.5 rounded">ORIGINAL</span>
+        <span className="bg-envision-pink/80 text-white font-pixel text-[8px] px-2 py-0.5 rounded">AI TRY-ON</span>
+      </div>
       {/* T / F / B buttons */}
       <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-30 flex gap-2 pointer-events-auto">
         {fitVariants.map((v, i) => (
@@ -171,6 +175,11 @@ export default function TryOn({ userData, sessionId }: TryOnProps) {
     setLoadingShop(true);
     getCartItems(sessionId).then(items => { setShoppingItems(items); setLoadingShop(false); });
   }, [activeMainTab, sessionId]);
+
+  const handleRemove = async (itemId: string) => {
+    await removeCartItem(sessionId, itemId);
+    setShoppingItems(prev => prev.filter(i => i.id !== itemId));
+  };
 
   const handleTryOn = async (garmentUrl: string, category: 'tops' | 'pants', itemId: string | number) => {
     if (tryingOn) return;
@@ -381,7 +390,7 @@ export default function TryOn({ userData, sessionId }: TryOnProps) {
                         className="w-40 aspect-square object-contain"
                         style={{ filter: 'url(#sticker-border)' }}
                       />
-                      <p className="font-space-mono text-[10px] text-white tracking-wider text-center -mt-2">{item.name}</p>
+                      <p className="font-space-mono text-[10px] text-black tracking-wider text-center -mt-2">{item.name}</p>
                     </motion.div>
                   ) : (
                     /* ── Regular / Shopping item — sticker style ── */
@@ -392,17 +401,24 @@ export default function TryOn({ userData, sessionId }: TryOnProps) {
                       animate={{ opacity: 1, scale: 1, rotate: activeItemId === item.id && tryingOn ? 0 : -2 }}
                       exit={{ opacity: 0, scale: 0.8 }}
                       whileHover={activeItemId === item.id && tryingOn ? {} : { rotate: [-2, -5, 1, -5, 1, -2], transition: { duration: 0.5, ease: 'easeInOut' } }}
-                      className={`col-span-1 flex flex-col items-center gap-3 cursor-pointer ${activeItemId === item.id && tryingOn ? 'opacity-50 pointer-events-none' : ''}`}
+                      className={`col-span-1 flex flex-col items-center gap-3 cursor-pointer relative ${activeItemId === item.id && tryingOn ? 'opacity-50 pointer-events-none' : ''}`}
                       onClick={() => handleTryOn(item.garment_url, item.category, item.id)}
                     >
-                      <img
-                        src={item.img}
-                        alt={item.name}
-                        className="w-28 aspect-square object-contain"
-                        style={{ filter: 'url(#sticker-border)' }}
-                        referrerPolicy="no-referrer"
-                      />
-                      <p className="font-space-mono text-[9px] text-white tracking-wider text-center -mt-2 leading-tight">{item.name}</p>
+                      <div className="relative">
+                        <img
+                          src={item.img}
+                          alt={item.name}
+                          className="w-28 aspect-square object-contain"
+                          style={{ filter: 'url(#sticker-border)' }}
+                          referrerPolicy="no-referrer"
+                        />
+                        <button
+                          onMouseDown={e => e.stopPropagation()}
+                          onClick={e => { e.stopPropagation(); handleRemove(item.id as string); }}
+                          className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-xs font-bold flex items-center justify-center shadow-md hover:bg-red-600 transition-colors z-10"
+                        >−</button>
+                      </div>
+                      <p className="font-space-mono text-[9px] text-black tracking-wider text-center -mt-2 leading-tight">{item.name}</p>
                     </motion.div>
                   )
                 ))}

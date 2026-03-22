@@ -17,6 +17,13 @@ export type TryOnCategory = 'upper_body' | 'lower_body' | 'dress';
 
 // ── Cart queue ────────────────────────────────────────────────────────────────
 
+export async function removeCartItem(sessionId: string, itemId: string): Promise<void> {
+  await fetch(`${BASE}/items/${itemId}`, {
+    method: 'DELETE',
+    headers: { 'X-Session-ID': sessionId },
+  });
+}
+
 export async function getCartItems(sessionId: string): Promise<CartItem[]> {
   try {
     const res = await fetch(`${BASE}/items?session_id=${sessionId}`);
