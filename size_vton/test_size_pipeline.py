@@ -147,6 +147,14 @@ def main():
                         help="Apply Real-ESRGAN x4 sharpening to each result (recovers VAE-decode blur)")
     parser.add_argument("--jnco", action="store_true",
                         help="Add JNCO wide-leg style to the inference run (forces --category lower_body)")
+    parser.add_argument("--post", action="store_true",
+                        help="Apply post-processing: fabric shading, logo sharpness, film grain, split preview")
+    parser.add_argument("--overlay", action="store_true",
+                        help="Save mask overlay debug images: person + base mask (red) + final mask (green)")
+    parser.add_argument("--diffmask", action="store_true",
+                        help="Use pixel-difference map instead of silhouette mask for background compositing")
+    parser.add_argument("--diffvis", action="store_true",
+                        help="Save amplified difference heatmap between original and diffusion output")
     args = parser.parse_args()
 
     from PIL import ImageOps
@@ -272,8 +280,6 @@ def main():
             debug=True,
             use_raw_mask=True,
             original_person_image=original_person_img if (args.clean or args.sam2b) else None,
-            person_mask=person_silhouette,
-            result_masker=sam2_wrapper if args.sam2b else None,
             upscaler=upscaler,
         )
         elapsed = time.time() - start
@@ -295,8 +301,6 @@ def main():
             debug=True,
             skin_fill=args.skin_strip,
             original_person_image=original_person_img if (args.clean or args.sam2b) else None,
-            person_mask=person_silhouette,
-            result_masker=sam2_wrapper if args.sam2b else None,
             upscaler=upscaler,
         )
         elapsed = time.time() - start
@@ -307,8 +311,59 @@ def main():
             out["skin_filled"].save(fill_path)
             print(f"  Skin-fill intermediate → {fill_path}")
 
+        # Mask overlay debug (--overlay)
+        if args.overlay and "base_mask" in out and "mask_used" in out:
+            import numpy as np
+            person_arr = np.array(out.get("skin_filled") or person_img.resize(
+                (out["base_mask"].width, out["base_mask"].height), Image.LANCZOS
+            )).copy()
+            base_arr   = np.array(out["base_mask"].convert("L"))
+            final_arr  = np.array(out["mask_used"].convert("L"))
+            # Red = base mask, Green = final mask used for inference
+            person_arr[base_arr  > 127, 0] = 220
+            person_arr[base_arr  > 127, 1] = 30
+            person_arr[base_arr  > 127, 2] = 30
+            person_arr[final_arr > 127, 0] = 30
+            person_arr[final_arr > 127, 1] = 220
+            person_arr[final_arr > 127, 2] = 30
+            overlay_img  = Image.fromarray(person_arr)
+            overlay_path = os.path.join(OUTPUT_DIR, f"overlay_{style.value}.jpg")
+            overlay_img.save(overlay_path)
+            print(f"  Mask overlay → {overlay_path}  (red=base, green=final)")
+
+        # Diff visualisation (--diffvis)
+        if args.diffvis and "person_resized" in out:
+            import numpy as np
+            orig_f   = np.array(out["person_resized"]).astype(np.float32)
+            result_f = np.array(out["result_image"]).astype(np.float32)
+            diff     = np.abs(result_f - orig_f).max(axis=2)          # max channel diff
+            diff_amp = np.clip(diff * 4.0, 0, 255).astype(np.uint8)   # 4× amplify so subtle changes show
+            # Save greyscale diff and false-colour heatmap side by side
+            grey    = Image.fromarray(diff_amp).convert("RGB")
+            heat_np = np.zeros((*diff_amp.shape, 3), dtype=np.uint8)
+            heat_np[:, :, 0] = diff_amp                                # red channel = magnitude
+            heat_np[:, :, 1] = np.clip(255 - diff_amp * 2, 0, 255)    # green fades out
+            heatmap = Image.fromarray(heat_np)
+            canvas  = Image.new("RGB", (grey.width * 2, grey.height))
+            canvas.paste(grey,    (0, 0))
+            canvas.paste(heatmap, (grey.width, 0))
+            diffvis_path = os.path.join(OUTPUT_DIR, f"diffvis_{style.value}.jpg")
+            canvas.save(diffvis_path)
+            print(f"  Diff vis → {diffvis_path}  (left=greyscale ×4, right=heatmap)")
+
+        # Post-processing (--post)
+        result_image = out["result_image"]
+        if args.post:
+            from post_process import apply_all, make_split_image
+            garment_mask = out.get("mask_used") or out.get("base_mask")
+            result_image = apply_all(result_image, garment_img, garment_mask)
+            split = make_split_image(original_person_img, result_image)
+            split_path = os.path.join(OUTPUT_DIR, f"split_{style.value}.jpg")
+            split.save(split_path)
+            print(f"  Split preview → {split_path}")
+
         # Add fit badge
-        result_with_badge = add_fit_badge(out["result_image"], style.value)
+        result_with_badge = add_fit_badge(result_image, style.value)
         out_path = os.path.join(OUTPUT_DIR, f"result_{style.value}.jpg")
         result_with_badge.save(out_path)
         results[style.value] = result_with_badge

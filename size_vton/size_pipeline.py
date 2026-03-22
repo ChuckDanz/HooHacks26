@@ -31,6 +31,14 @@ from utils import resize_and_crop, resize_and_padding
 WIDTH, HEIGHT = 768, 1024
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+def _face_chin_y(person_img: Image.Image) -> int:
+    """
+    Returns the y-coordinate below which the garment mask is allowed.
+    Fixed at 22% of image height — covers the face/neck region for
+    typical fashion photos regardless of pose or face angle.
+    """
+    return int(person_img.height * 0.22)
+
 
 class SizeVariablePipeline:
     """
@@ -61,8 +69,6 @@ class SizeVariablePipeline:
         skin_fill: bool = False,
         use_raw_mask: bool = False,
         original_person_image: Image.Image = None,
-        person_mask: Image.Image = None,
-        result_masker=None,
         upscaler=None,
     ) -> dict:
         """
@@ -100,15 +106,26 @@ class SizeVariablePipeline:
         cloth_type = cloth_type_map.get(garment_category, "upper")
 
         # 1. Resize inputs to model dimensions.
-        #    Upscale garment 2× first (LANCZOS) so the subsequent downscale to
-        #    768×1024 preserves fine detail (logos, texture, stitching).
+        #    ESRGAN the garment first (if available) so the VAE encoder gets
+        #    sharper texture detail. Fall back to 2× LANCZOS without upscaler.
         person_resized = resize_and_crop(person_image, (WIDTH, HEIGHT))
-        gw, gh = garment_image.size
-        garment_up     = garment_image.resize((gw * 2, gh * 2), Image.LANCZOS)
-        garment_resized = resize_and_padding(garment_up, (WIDTH, HEIGHT))
+        if upscaler is not None:
+            print("  [ESRGAN] Upscaling garment for conditioning...")
+            garment_resized = upscaler.upscale(garment_image, out_size=(WIDTH, HEIGHT))
+        else:
+            gw, gh = garment_image.size
+            garment_up = garment_image.resize((gw * 2, gh * 2), Image.LANCZOS)
+            garment_resized = resize_and_padding(garment_up, (WIDTH, HEIGHT))
 
         # 2. Generate base mask via AutoMasker
         base_mask = self.masker(person_resized, cloth_type)["mask"]
+
+        # 2b. Cap mask at top 22% — garment never bleeds onto face/neck
+        chin_y = _face_chin_y(person_resized)
+        mask_np = np.array(base_mask.convert("L"))
+        mask_np[:chin_y, :] = 0
+        base_mask = Image.fromarray(mask_np).convert(base_mask.mode)
+        print(f"  [FaceCap] Mask zeroed above y={chin_y}.")
 
         # 3. (Optional) Skin fill for TIGHT style.
         #    Replace the garment region with the person's own sampled skin tone
@@ -153,39 +170,35 @@ class SizeVariablePipeline:
             generator=generator,
         )[0]
 
-        # 8. Real-ESRGAN sharpening (optional).
-        #    Upscale 4× then resize back to 768×1024 so downstream compositing
-        #    works at the same resolution while recovering VAE-decode blur.
-        if upscaler is not None:
-            print("  [ESRGAN] Upscaling result...")
-            result = upscaler.upscale(result, out_size=(WIDTH, HEIGHT))
+        # 8a. Restore original pixels anywhere diffusion shouldn't have touched:
+        #     (a) Face region — everything above chin_y
+        #     (b) White speckle artifacts — near-white pixels outside the garment mask
+        result_np  = np.array(result)
+        orig_np    = np.array(person_resized)
+        mask_bool  = np.array(smooth_mask.convert("L")) > 127
 
-        # 9. Composite back onto original background.
-        #
-        #    Paste the CatVTON result onto the original (or bgfill-inpainted)
-        #    background using the person silhouette mask.  The mask is
-        #    threshold → erode → feathered to avoid blending the white
-        #    CatVTON background into the final image at edge pixels.
+        # (a) Hard-restore face
+        result_np[:chin_y, :] = orig_np[:chin_y, :]
+
+        # (b) Kill white artifacts outside the mask (arms, skin, background)
+        is_white    = (result_np[:, :, 0] > 230) & (result_np[:, :, 1] > 230) & (result_np[:, :, 2] > 230)
+        is_artifact = is_white & ~mask_bool
+        result_np[is_artifact] = orig_np[is_artifact]
+
+        result = Image.fromarray(result_np)
+
+        # 8b. Composite back onto original background.
         if original_person_image is not None:
             orig_resized = resize_and_crop(original_person_image, (WIDTH, HEIGHT))
-            if result_masker is not None:
-                # Segment the CatVTON result directly — the result has a white bg so
-                # SAM2 produces a clean hard binary mask that matches the new rendered
-                # silhouette (not the original person shape, which may differ e.g. for
-                # a tight garment replacing a bulky one).
-                sil_mask = result_masker.segment_person(result)
-                orig_resized.paste(result, mask=sil_mask)
-            elif person_mask is not None:
-                # Fallback: use the pre-computed silhouette (e.g. rembg alpha)
-                sil_arr = np.array(
-                    person_mask.resize((WIDTH, HEIGHT), Image.LANCZOS).convert("L")
-                )
-                orig_resized.paste(result, mask=Image.fromarray(sil_arr))
-            else:
-                # Last resort: paste via garment inpainting mask only
-                composite_mask = smooth_mask.convert("L").point(lambda p: 255 if p > 127 else 0)
-                orig_resized.paste(result, mask=composite_mask)
-            result = orig_resized
+            orig_bg_np   = np.array(orig_resized)
+            result_np2   = np.array(result)
+
+            # Pixel-diff composite: where diffusion changed a pixel → use result,
+            # where it didn't → use original background. No masks needed.
+            diff    = np.abs(result_np2.astype(np.int32) - orig_np.astype(np.int32)).max(axis=2)
+            changed = diff > 25  # pixels the diffusion model actually modified
+            composite = np.where(changed[:, :, np.newaxis], result_np2, orig_bg_np)
+            result  = Image.fromarray(composite.astype(np.uint8))
 
         output = {
             "result_image":    result,
@@ -195,6 +208,7 @@ class SizeVariablePipeline:
             output["mask_used"]      = smooth_mask
             output["garment_scaled"] = scaled_garment
             output["base_mask"]      = base_mask
+            output["person_resized"] = person_resized
             if skin_filled is not None:
                 output["skin_filled"] = skin_filled
 
