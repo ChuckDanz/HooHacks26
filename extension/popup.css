@@ -1,0 +1,129 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 340px;
+  min-height: 120px;
+  font-family: 'Segoe UI', sans-serif;
+  background: #0f0f0f;
+  color: #f0f0f0;
+  font-size: 13px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.logo {
+  font-weight: 800;
+  font-size: 15px;
+  color: #7c3aed;
+  letter-spacing: 0.02em;
+}
+
+header button {
+  background: none;
+  border: 1px solid #333;
+  color: #888;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 11px;
+}
+header button:hover { border-color: #666; color: #ccc; }
+
+/* Item list */
+#list { max-height: 380px; overflow-y: auto; }
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #1e1e1e;
+  transition: background 0.15s;
+}
+.item:hover { background: #161616; }
+
+.item img {
+  width: 52px;
+  height: 68px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: #222;
+}
+
+.item .meta { flex: 1; overflow: hidden; }
+.item .retailer {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #7c3aed;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.item .name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+  margin: 2px 0;
+}
+.item .price { color: #888; font-size: 11px; }
+
+.item .remove {
+  background: none;
+  border: none;
+  color: #444;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.item .remove:hover { color: #e55; background: #1e1e1e; }
+
+/* Empty state */
+#empty {
+  text-align: center;
+  padding: 32px 20px;
+  color: #555;
+}
+#empty .hint {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #444;
+}
+
+/* Footer CTA */
+footer {
+  padding: 10px 14px;
+  background: #1a1a1a;
+  border-top: 1px solid #2a2a2a;
+}
+
+#tryonBtn {
+  display: block;
+  width: 100%;
+  padding: 11px;
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+#tryonBtn:disabled { opacity: 0.35; cursor: default; }
+#tryonBtn:not(:disabled):hover { background: #6d28d9; }
+
+/* Scrollbar */
+#list::-webkit-scrollbar { width: 4px; }
+#list::-webkit-scrollbar-track { background: transparent; }
+#list::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }

@@ -1,0 +1,20 @@
+version: "3.9"
+
+# Only Aerospike runs in Docker.
+# FastAPI API runs locally (needs GPU + venv) — see start_api.bat
+# Start Aerospike:  docker compose up -d
+
+services:
+  aerospike:
+    image: aerospike/aerospike-server:latest
+    container_name: hoohacks_aerospike
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "3002:3002"
+    volumes:
+      - aerospike_data:/opt/aerospike/data
+    restart: unless-stopped
+
+volumes:
+  aerospike_data:

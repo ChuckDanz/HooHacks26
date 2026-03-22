@@ -6,3 +6,5 @@ ENV/
 
 test_cases/
 output/
+
+*.pyc
