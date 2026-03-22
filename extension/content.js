@@ -150,7 +150,9 @@
         return;
       }
       if (resp?.ok) {
-        showToast(`✓ Added to FitCheck (${resp.count} item${resp.count !== 1 ? 's' : ''})`);
+        showToast(`✓ Added to FitCheck (${resp.count}/2)`);
+      } else if (resp?.limitReached) {
+        showToast('FitCheck cart full (2/2) — open the app to try on or remove an item');
       } else {
         showToast('FitCheck: could not save item (is Docker running?)');
       }

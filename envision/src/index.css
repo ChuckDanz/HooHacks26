@@ -1,0 +1,174 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Permanent+Marker&family=Caveat:wght@400;700&family=Gloria+Hallelujah&family=Ubuntu:wght@400;700&family=Covered+By+Your+Grace&family=Space+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-analog: "Courier New", Courier, monospace;
+  --font-pixel: "Press Start 2P", system-ui;
+  --font-digital: "Courier New", Courier, monospace; /* Fallback for digital feel */
+  --font-handwritten: "Permanent Marker", cursive;
+  --font-script: "Caveat", cursive;
+  --font-gloria: "Gloria Hallelujah", cursive;
+  --font-ubuntu: "Ubuntu", sans-serif;
+  --font-covered: "Covered By Your Grace", cursive;
+  --font-space-mono: "Space Mono", monospace;
+  
+  --color-royal-purple: #7851a9;
+  --color-magenta: #ff00ff;
+  --color-dark-magenta: #8b008b;
+  --color-gem-pink: #ff69b4;
+  --color-envision-pink: rgb(219, 85, 139);
+  --color-royal-blue: rgb(0, 35, 102);
+  --color-grid-line: rgba(100, 149, 237, 0.3);
+}
+
+@layer base {
+  body {
+    @apply bg-[#fdfdfb] text-black overflow-x-hidden min-h-screen;
+    background-image: 
+      linear-gradient(var(--color-grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-grid-line) 1px, transparent 1px);
+    background-size: 30px 30px;
+    background-attachment: fixed;
+  }
+}
+
+/* Glossy 3D Button Style - Inspired by provided images */
+.glossy-button {
+  @apply relative overflow-hidden transition-all duration-300 active:scale-95 rounded-full px-6 py-2 font-pixel text-[10px] tracking-widest uppercase flex items-center justify-center gap-2;
+  background: linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.1) 50%, rgba(0,0,0,0.3) 100%);
+  box-shadow: 
+    0 8px 20px rgba(0,0,0,0.4),
+    inset 0 2px 2px rgba(255,255,255,0.9),
+    inset 0 -4px 10px rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.2);
+  text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+
+.glossy-button::before {
+  content: '';
+  @apply absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-white/50 to-transparent pointer-events-none;
+}
+
+.glossy-magenta {
+  @apply bg-magenta text-white;
+  box-shadow: 
+    0 0 30px rgba(255,0,255,0.4),
+    0 8px 20px rgba(0,0,0,0.4),
+    inset 0 2px 2px rgba(255,255,255,0.9),
+    inset 0 -4px 10px rgba(0,0,0,0.4);
+}
+
+/* Ripped Paper Effect */
+.ripped-paper {
+  @apply bg-white/80 backdrop-blur-sm text-black p-8 relative inline-block;
+  clip-path: polygon(
+    0% 8%, 4% 0%, 12% 5%, 22% 1%, 32% 6%, 42% 2%, 52% 7%, 62% 1%, 72% 5%, 82% 0%, 92% 4%, 100% 10%,
+    98% 20%, 100% 30%, 97% 40%, 100% 50%, 98% 60%, 100% 70%, 97% 80%, 100% 90%, 98% 98%, 92% 100%,
+    82% 96%, 72% 100%, 62% 95%, 52% 99%, 42% 94%, 32% 98%, 22% 93%, 12% 97%, 4% 92%, 0% 100%,
+    2% 90%, 0% 80%, 3% 70%, 0% 60%, 2% 50%, 0% 40%, 3% 30%, 0% 20%
+  );
+  filter: drop-shadow(0 10px 20px rgba(0,0,0,0.5));
+}
+
+.grid-mask-center {
+  mask-image: radial-gradient(circle, transparent 30%, black 70%);
+}
+
+.grid-fade-out {
+  mask-image: linear-gradient(to bottom, black 0%, transparent 40%, transparent 60%, black 100%),
+              linear-gradient(to right, black 0%, transparent 40%, transparent 60%, black 100%);
+  mask-composite: intersect;
+}
+
+.sticker-hover {
+  @apply transition-all duration-500;
+}
+
+.sticker-hover:hover {
+  transform: translateY(-10px) rotate(3deg) scale(1.05);
+  filter: drop-shadow(0 20px 30px rgba(0,0,0,0.2));
+}
+
+.sticker-base {
+  @apply absolute cursor-pointer select-none;
+  filter: drop-shadow(0 5px 15px rgba(0,0,0,0.1));
+}
+
+.stamp-effect {
+  @apply border-[12px] border-white shadow-xl;
+  background-color: white;
+  padding: 2px;
+  box-shadow: 
+    0 15px 35px rgba(0,0,0,0.15),
+    0 0 0 1px rgba(0,0,0,0.05);
+  /* Perforated edge effect using a repeating radial gradient on the border */
+  position: relative;
+}
+
+.stamp-effect::after {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  background-image: radial-gradient(circle, #fdfdfb 40%, transparent 42%);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+  pointer-events: none;
+}
+
+/* Washi Tape Button Style */
+.washi-tape-button {
+  @apply relative inline-block px-12 py-4 font-gloria text-white text-2xl transition-all duration-300 active:scale-95 flex items-center justify-center gap-3;
+  background-color: var(--color-envision-pink);
+  background-image: 
+    linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 50%, rgba(0,0,0,0.1) 100%),
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,0.1) 0%, transparent 100%);
+  background-size: 100% 100%;
+  box-shadow: 
+    0 10px 25px -5px rgba(0,0,0,0.3),
+    0 5px 10px rgba(0,0,0,0.2),
+    inset 0 -2px 5px rgba(0,0,0,0.2),
+    inset 0 2px 5px rgba(255,255,255,0.2);
+  clip-path: polygon(
+    0% 3%, 5% 0%, 15% 2%, 25% 4%, 35% 1%, 45% 3%, 55% 0%, 65% 2%, 75% 4%, 85% 1%, 95% 3%, 100% 0%,
+    98% 25%, 100% 50%, 97% 75%, 100% 100%, 95% 97%, 85% 100%, 75% 98%, 65% 100%, 55% 97%, 45% 99%, 35% 96%, 25% 98%, 15% 95%, 5% 97%, 0% 94%,
+    2% 75%, 0% 50%, 3% 25%
+  );
+  transform: rotate(-1deg);
+  border: none;
+}
+
+.washi-tape-button::before {
+  content: '';
+  @apply absolute -bottom-1 -right-1 w-full h-full bg-black/10 -z-10 blur-[4px];
+  clip-path: inherit;
+  transform: translate(3px, 3px);
+}
+
+.washi-tape-button::after {
+  content: '';
+  @apply absolute inset-0 opacity-10 pointer-events-none;
+  background-image: url("https://www.transparenttextures.com/patterns/paper-fibers.png");
+}
+
+.washi-tape-button:hover {
+  transform: rotate(0.5deg) scale(1.02);
+  box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+}
+
+.washi-tape-button:disabled {
+  @apply opacity-50 cursor-not-allowed grayscale;
+}
+
+.paper-texture {
+  background-color: #f5f5f0;
+  background-image: url("https://www.transparenttextures.com/patterns/paper-fibers.png");
+  box-shadow: 
+    0 20px 50px rgba(0,0,0,0.3),
+    inset 0 0 100px rgba(0,0,0,0.05);
+}
+
+.tape-effect {
+  @apply absolute w-24 h-8 bg-white/30 backdrop-blur-sm -rotate-12 z-20;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+}

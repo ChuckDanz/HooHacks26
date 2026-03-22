@@ -4,6 +4,7 @@
  */
 
 const API_BASE = 'http://localhost:8000';
+const FRONTEND_BASE = 'http://localhost:5173';
 
 let items = [];
 
@@ -92,7 +93,7 @@ document.getElementById('clearBtn').addEventListener('click', () => {
 
 document.getElementById('tryonBtn').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'GET_SESSION' }, ({ sessionId }) => {
-    const url = `${API_BASE}/tryon?session=${sessionId}`;
+    const url = `${FRONTEND_BASE}?session=${sessionId}`;
     chrome.tabs.create({ url });
   });
 });

@@ -18,12 +18,16 @@ app.add_middleware(
 app.include_router(queue.router)
 app.include_router(tryon.router)
 
-# Serve the try-on SPA
+# Serve the try-on SPA + demo garment images
 _static = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=_static), name="static")
 
+_garments_dir = os.path.join(os.path.dirname(__file__), "..", "garments")
+os.makedirs(_garments_dir, exist_ok=True)
+app.mount("/garments", StaticFiles(directory=_garments_dir), name="garments")
 
-@app.get("/tryon")
+
+@app.get("/tryon-page")
 def tryon_page():
     return FileResponse(os.path.join(_static, "tryon.html"))
 

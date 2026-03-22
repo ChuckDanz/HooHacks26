@@ -1,0 +1,7 @@
+{
+  "name": "Envision",
+  "description": "Virtually designing you. A virtual try-on platform for hackathon projects.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

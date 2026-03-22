@@ -124,26 +124,28 @@ async def run_tryon(
     if category not in VALID_CATEGORIES:
         raise HTTPException(400, f"category must be one of {VALID_CATEGORIES}")
 
-    person_tmp  = None
-    garment_tmp = None
+    person_tmp       = None
+    person_tmp_owned = False  # only True for anonymous (no session) uploads
+    garment_tmp      = None
 
     try:
-        # ── Resolve person image: uploaded > cached on disk (path in Aerospike) ─
+        # ── Resolve person image ──────────────────────────────────────────────
         if person and person.filename:
             person_bytes = await person.read()
             suffix = os.path.splitext(person.filename)[1] or ".jpg"
             if session_id:
-                # Save to disk, store path in Aerospike — reused on future calls
                 person_tmp = db.save_person_image(session_id, person_bytes, suffix)
+                # Persistent cache — do NOT delete after use
             else:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
                     f.write(person_bytes)
                     person_tmp = f.name
+                person_tmp_owned = True
         elif session_id:
             person_tmp = db.get_person_image(session_id)
             if person_tmp is None:
-                raise HTTPException(400, "No person photo provided and none cached for this session.")
-            person_tmp = person_tmp  # already a path on disk, don't delete it in finally
+                raise HTTPException(400, "No person photo found for this session — please upload one first.")
+            # Persistent cache path — do NOT delete it
         else:
             raise HTTPException(400, "person photo is required.")
 
@@ -169,13 +171,23 @@ async def run_tryon(
         raise HTTPException(502, f"Garment image download error: {e}")
     except RuntimeError as e:
         raise HTTPException(500, str(e))
+    except Exception as e:
+        import traceback, sys
+        tb = traceback.format_exc()
+        print(f"[tryon] Unhandled exception:\n{tb}", flush=True, file=sys.stderr)
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
     finally:
-        for p in [person_tmp, garment_tmp]:
-            if p and os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
+        # Only delete garment temp + anonymous person temp; never delete cached person
+        if person_tmp_owned and person_tmp and os.path.exists(person_tmp):
+            try:
+                os.unlink(person_tmp)
+            except OSError:
+                pass
+        if garment_tmp and os.path.exists(garment_tmp):
+            try:
+                os.unlink(garment_tmp)
+            except OSError:
+                pass
 
 
 @router.get("/tryon/person")
@@ -183,3 +195,15 @@ async def has_person_cached(session_id: str):
     """Check if a person photo is cached for this session."""
     cached = db.get_person_image(session_id) if session_id else None
     return {"cached": cached is not None}
+
+
+@router.post("/person")
+async def upload_person(
+    session_id: str = Form(...),
+    person: UploadFile = File(...),
+):
+    """Cache the user's person photo for this session (no try-on, just save)."""
+    person_bytes = await person.read()
+    suffix = os.path.splitext(person.filename or "photo.jpg")[1] or ".jpg"
+    path = db.save_person_image(session_id, person_bytes, suffix)
+    return {"cached": True, "path": os.path.basename(path)}

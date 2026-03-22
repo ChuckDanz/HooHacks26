@@ -85,8 +85,13 @@ async function handleAddItem(item) {
     body: JSON.stringify({ item }),
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text}`);
+    const body = await res.json().catch(() => ({}));
+    const detail = body.detail || `API error ${res.status}`;
+    if (res.status === 409) {
+      // Demo cap reached — surface cleanly to content script
+      return { ok: false, limitReached: true, error: detail };
+    }
+    throw new Error(detail);
   }
   const data = await res.json();
   chrome.action.setBadgeText({ text: String(data.count) });

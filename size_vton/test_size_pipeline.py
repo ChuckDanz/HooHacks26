@@ -31,7 +31,7 @@ from utils import init_weight_dtype
 from mask_generator import MaskGenerator, SizeStyle
 from boundary_smoother import BoundarySmoother
 from size_pipeline import SizeVariablePipeline
-from fit_utils import add_fit_badge, make_comparison_grid
+from fit_utils import make_comparison_grid
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -283,7 +283,7 @@ def main():
             upscaler=upscaler,
         )
         elapsed = time.time() - start
-        result_with_badge = add_fit_badge(out["result_image"], "default")
+        result_with_badge = out["result_image"]
         out_path = os.path.join(OUTPUT_DIR, "result_default.jpg")
         result_with_badge.save(out_path)
         results["default"] = result_with_badge
@@ -363,7 +363,7 @@ def main():
             print(f"  Split preview → {split_path}")
 
         # Add fit badge
-        result_with_badge = add_fit_badge(result_image, style.value)
+        result_with_badge = result_image
         out_path = os.path.join(OUTPUT_DIR, f"result_{style.value}.jpg")
         result_with_badge.save(out_path)
         results[style.value] = result_with_badge
